@@ -1,0 +1,95 @@
+name: Windows Build Test
+
+on:
+  push:
+    branches: [ main, master, develop, "260525" ]
+  pull_request:
+    branches: [ main, master, develop, "260525" ]
+  workflow_dispatch: # 수동 실행 가능
+
+jobs:
+  windows-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # 전체 히스토리를 가져와서 빌드에 필요한 정보 확보
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Cache Docker layers
+      uses: actions/cache@v3
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+    
+    - name: Enable Docker BuildKit
+      run: |
+        echo "DOCKER_BUILDKIT=1" >> $GITHUB_ENV
+        echo "COMPOSE_DOCKER_CLI_BUILD=1" >> $GITHUB_ENV
+    
+    - name: Setup Docker environment
+      run: |
+        docker --version
+        # Docker가 실행 중인지 확인
+        sudo systemctl status docker || sudo systemctl start docker
+        # Docker 그룹에 현재 사용자 추가 (필요시)
+        sudo usermod -aG docker $USER
+    
+    - name: Check build script permissions
+      run: |
+        ls -la contrib/build-wine/build.sh
+        chmod +x contrib/build-wine/build.sh
+    
+    - name: Debug build environment
+      run: |
+        echo "=== Current directory ==="
+        pwd
+        echo "=== Directory contents ==="
+        ls -la
+        echo "=== Build script check ==="
+        ls -la contrib/build-wine/build.sh
+        echo "=== Docker check ==="
+        docker --version
+        docker info --format "{{.ServerVersion}}" || echo "Docker daemon issue"
+    
+    - name: Run Windows build
+      run: |
+        cd ${{ github.workspace }}
+        export DOCKER_BUILDKIT=1
+        echo "Starting build process..."
+        ./contrib/build-wine/build.sh 2>&1 | tee build.log
+      timeout-minutes: 60
+    
+    - name: Check build output
+      run: |
+        echo "=== Build completed, checking output ==="
+        ls -la dist/ || echo "dist directory not found"
+        find . -name "*.exe" -type f || echo "No .exe files found"
+        find . -name "electrum*" -type f | head -20
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      if: always()  # 빌드가 실패해도 아티팩트 업로드 시도
+      with:
+        name: electrum-windows-build-${{ github.sha }}
+        path: |
+          dist/
+          *.exe
+        retention-days: 7
+    
+    - name: Upload build logs
+      uses: actions/upload-artifact@v4
+      if: failure()  # 빌드 실패시 로그 업로드
+      with:
+        name: build-logs-${{ github.sha }}
+        path: |
+          *.log
+          build*.log
+          /tmp/*.log
+        retention-days: 3
